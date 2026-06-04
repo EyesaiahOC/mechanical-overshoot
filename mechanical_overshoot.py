@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Mechanical Overshoot",
     "author": "Isaac O'Connor",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (3, 6, 0),
     "location": "Graph Editor > Sidebar > Mechanical",
     "description": "Add elastic overshoot to mechanical animation keyframes.",
@@ -79,7 +79,7 @@ def _find_modifier(fcurve, anchor_frame):
 
 
 
-def _decode_modifier(modifier, anchor_frame):
+def _decode_modifier(modifier, anchor_frame, fcurve=None, anchor_kp=None):
     """Reverse _configure_modifier to recover user-facing params."""
     after = modifier.phase_multiplier >= 0
     if after:
@@ -88,15 +88,22 @@ def _decode_modifier(modifier, anchor_frame):
         duration = max(2, round(anchor_frame - modifier.frame_start))
     bounces = max(1, round(abs(modifier.phase_multiplier) * duration))
     amplitude = abs(modifier.amplitude) / _NORMALIZER
+    flip = False
+    if fcurve is not None and anchor_kp is not None:
+        dir_sign = _direction_sign(fcurve, anchor_kp, after)
+        # Without flip: amplitude = -dir_sign * ..., so amplitude * dir_sign < 0.
+        # With flip the sign is negated, so amplitude * dir_sign > 0.
+        flip = (modifier.amplitude * dir_sign > 0)
     return {
         'direction': 'AFTER' if after else 'BEFORE',
         'duration': duration,
         'amplitude': amplitude,
         'bounces': bounces,
+        'flip': flip,
     }
 
 
-def _configure_modifier(modifier, anchor_frame, duration, amplitude, bounces, dir_sign, after):
+def _configure_modifier(modifier, anchor_frame, duration, amplitude, bounces, dir_sign, after, flip=False):
     """
     phase_multiplier = ±bounces/duration so SINC evaluates to exactly zero at
     both the anchor frame (x=1) and the far end of the restricted range (x=1+bounces).
@@ -105,9 +112,10 @@ def _configure_modifier(modifier, anchor_frame, duration, amplitude, bounces, di
     pm = bounces / duration if after else -(bounces / duration)
     po = 1.0 - pm * anchor_frame
 
+    effective_sign = dir_sign * (-1 if flip else 1)
     modifier.function_type = 'SINC'
     modifier.use_additive = True
-    modifier.amplitude = -dir_sign * _NORMALIZER * amplitude
+    modifier.amplitude = -effective_sign * _NORMALIZER * amplitude
     modifier.phase_multiplier = pm
     modifier.phase_offset = po
     modifier.value_offset = 0.0
@@ -119,9 +127,8 @@ def _configure_modifier(modifier, anchor_frame, duration, amplitude, bounces, di
     modifier.blend_out = 0.0
 
 
-def _apply(fcurve, anchor_kp, duration, amplitude, bounces, after):
+def _apply(fcurve, anchor_kp, duration, amplitude, bounces, after, flip=False):
     anchor_frame = anchor_kp.co.x
-    anchor_value = anchor_kp.co.y
     dir_sign = _direction_sign(fcurve, anchor_kp, after)
 
     modifier = _find_modifier(fcurve, anchor_frame)
@@ -129,7 +136,7 @@ def _apply(fcurve, anchor_kp, duration, amplitude, bounces, after):
         modifier = fcurve.modifiers.new(type='FNGENERATOR')
     modifier.name = _modifier_name(anchor_frame)
 
-    _configure_modifier(modifier, anchor_frame, duration, amplitude, bounces, dir_sign, after)
+    _configure_modifier(modifier, anchor_frame, duration, amplitude, bounces, dir_sign, after, flip)
     fcurve.update()
 
 
@@ -146,7 +153,7 @@ def _live_update(self, context):
             if modifier is None:
                 continue
             dir_sign = _direction_sign(fcurve, anchor_kp, after)
-            _configure_modifier(modifier, anchor_kp.co.x, self.duration, self.amplitude, self.bounces, dir_sign, after)
+            _configure_modifier(modifier, anchor_kp.co.x, self.duration, self.amplitude, self.bounces, dir_sign, after, self.flip)
             fcurve.update()
             changed = True
         if changed:
@@ -197,7 +204,7 @@ def _sync_timer():
                         return 0.1
                     _last_sync_key = sync_key
 
-                    params = _decode_modifier(first_mod, first_kp.co.x)
+                    params = _decode_modifier(first_mod, first_kp.co.x, first_fc, first_kp)
                     s = scene.mechanical_overshoot_settings
                     _IS_UPDATING = True
                     try:
@@ -209,6 +216,8 @@ def _sync_timer():
                             s.amplitude = params['amplitude']
                         if s.bounces != params['bounces']:
                             s.bounces = params['bounces']
+                        if s.flip != params['flip']:
+                            s.flip = params['flip']
                     finally:
                         _IS_UPDATING = False
                 return 0.1
@@ -248,6 +257,12 @@ class MechanicalOvershootSettings(PropertyGroup):
         default=1,
         min=1,
         max=10,
+        update=_live_update,
+    )
+    flip: bpy.props.BoolProperty(
+        name="Flip Direction",
+        description="Invert the overshoot — wave goes opposite to the natural motion direction",
+        default=False,
         update=_live_update,
     )
 
@@ -295,7 +310,7 @@ class GRAPH_OT_apply_mechanical_overshoot(Operator):
         applied = 0
 
         for fcurve, anchor_kp in _selected_keyframes(context):
-            _apply(fcurve, anchor_kp, s.duration, s.amplitude, s.bounces, after)
+            _apply(fcurve, anchor_kp, s.duration, s.amplitude, s.bounces, after, s.flip)
             applied += 1
 
         if applied:
@@ -322,6 +337,7 @@ class GRAPH_PT_mechanical_overshoot(Panel):
         layout.prop(s, "duration")
         layout.prop(s, "amplitude")
         layout.prop(s, "bounces")
+        layout.prop(s, "flip")
 
 
 classes = (
