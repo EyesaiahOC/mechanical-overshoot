@@ -1,67 +1,45 @@
-# Mechanical Overshoot Prototype
+# Mechanical Overshoot
 
-This is a small Blender add-on prototype that automates your manual Graph Editor setup.
+A Blender add-on that adds mechanical elastic overshoot to animated F-curves. Select a keyframe, click Apply — the add-on attaches an additive SINC Function Generator modifier to the F-curve that creates a damped oscillation settle or departure kick, using only four controls.
 
-It does not add keyframes. It adds or updates one native **Built-In Function / Function Generator** F-Curve modifier per selected keyframe.
+## How It Works
+
+The add-on adds a native **Function Generator (SINC)** F-curve modifier set to additive mode. The modifier is restricted to a frame range starting at (or ending at) the selected keyframe. The phase multiplier is set so the SINC function evaluates to exactly zero at both the anchor frame and the far end of the range — no blend hacks, mathematically guaranteed settle.
+
+Direction is auto-detected from the adjacent keyframe slope, so the first oscillation always overshoots in the correct direction relative to the motion.
 
 ## Install
 
-1. In Blender, go to **Edit > Preferences > Add-ons**.
-2. Click **Install...**.
-3. Choose either `mechanical_overshoot.py` for the single-file add-on, or install this add-on as a package if you want the `__init__.py` reload helper.
-4. Enable **Mechanical Overshoot**.
+1. **Edit → Preferences → Add-ons → Install**
+2. Select the `mechanical_overshoot` folder (or zip it first)
+3. Enable **Mechanical Overshoot**
 
-For fast iteration, use the package install. Put `__init__.py` and `mechanical_overshoot.py` inside a package folder named `mechanical_overshoot` or another Python-friendly name without spaces. The package `__init__.py` explicitly reloads `mechanical_overshoot.py`, so Blender's **Reload Scripts** command picks up the latest edited version instead of keeping the cached module.
+For fast iteration during development, install as a package. The `__init__.py` reloads `mechanical_overshoot.py` on **Reload Scripts** so you don't need to reinstall on every change.
 
 ## Use
 
-1. Open the **Graph Editor**.
-2. Select one or more keyframes.
-3. Press `N` to open the sidebar.
-4. Open the **Mechanical** tab.
-5. Click **Apply Mechanical Overshoot**.
-6. Keep the same keyframe selected and adjust the controls to update that modifier live.
+1. Open the **Graph Editor**
+2. Select one or more keyframes
+3. Press `N` → **Mechanical** tab
+4. Set your parameters
+5. Click **Apply Mechanical Overshoot**
 
-The add-on creates a Function Generator modifier named like `Mechanical Overshoot 35`, where `35` is the selected keyframe frame.
+Adjust **Amplitude** and **Bounces** live with the sliders — the modifier updates in place. **Duration** and **Direction** require re-applying.
 
-If you press the button again on the same selected keyframe, it updates that modifier instead of adding another one.
+To remove the effect, select the keyframe and click **Remove Mechanical Overshoot**.
 
-Existing Mechanical Overshoot modifiers on the currently selected keyframes update live while you change the panel controls. The add-on does not create new modifiers until you press **Apply Mechanical Overshoot**.
+## Parameters
 
-When exactly one keyframe with an existing Mechanical Overshoot modifier is selected, the panel controls load that modifier's saved settings.
-
-## Current Defaults
-
-- Function type: **Normalized Sine**
-- Additive: **On**
-- Offshoot Size: `2`
-- Time Offset: `0`
-- Waves in Range: `0.25`
-- Blend In/Out: half of offshoot size
-- Scale Mode: **Relative**
-- Amplitude: `0.12`
-- Amplitude Scale: `1`
-- Phase Offset: `2.7`
-- Value Offset: `0`
-- Restricted Frame Range:
-  - selected frame plus time offset to selected frame plus time offset plus offshoot size
-
-In **Relative** scale mode, the add-on looks at the selected keyframe and its local neighboring keyframe movement. It then multiplies that movement by **Amplitude** and **Amplitude Scale**, so a 1 mm location move produces a tiny overshoot and a large movement produces a proportionally larger overshoot. If the preferred neighboring movement is flat, it checks the other adjacent side, then the wider curve span, and finally falls back to zero rather than inventing a large default amplitude.
-
-**Amplitude Scale** is the master size control for the generated overshoot wave. **Amplitude** is the base strength control. In Relative mode, the final native modifier amplitude is:
-
-`local graph movement * Amplitude * Amplitude Scale`
-
-In Absolute mode, the final native modifier amplitude is:
-
-`Amplitude * Amplitude Scale`
-
-**Waves in Range** converts to Blender's native Function Generator phase multiplier based on the current Offshoot Size. Increasing the value fits more wave cycles inside the restricted frame range.
-
-**Time Offset** places the start of the overshoot range relative to the selected keyframe. `0` starts on the selected keyframe, negative values start before it, and positive values start after it. For example, with a selected keyframe on frame `35`, offshoot size `3`, and time offset `-3`, the restricted range is `32-35`; with time offset `3`, the restricted range is `38-41`.
-
-**Value Offset** now writes directly to Blender's native Function Generator value offset. It is no longer scaled automatically.
+| Parameter | Description |
+|---|---|
+| **Direction** | **After** — arrival settle, oscillation after the anchor keyframe. **Before** — departure kick, oscillation before the anchor keyframe. |
+| **Duration** | Total frames the effect lasts. |
+| **Amplitude** | Peak overshoot size in curve value units (degrees, metres, etc.). |
+| **Bounces** | Number of oscillation lobes. 1 = single overshoot and settle. Higher values give a looser, more elastic feel. |
 
 ## Notes
 
-**Flip Direction** currently flips the generated wave internally while keeping the visible amplitude control positive. This is the first prototype version, so the exact peak/trough alignment may need tuning against your manual Blender setup.
+- The modifier is **additive** and **non-destructive** — your original keyframes are untouched.
+- The SINC zeros are mathematically exact at both ends of the restricted range, so the curve settles precisely at the keyframe value with no residual offset.
+- Live update works for **Amplitude** and **Bounces**. For **Duration** or **Direction** changes, delete the modifier (Remove button) and re-apply.
+- When multiple keyframes are selected, Apply and Remove operate on all of them simultaneously.
