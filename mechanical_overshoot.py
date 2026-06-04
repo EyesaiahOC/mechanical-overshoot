@@ -148,6 +148,7 @@ class MechanicalOvershootSettings(PropertyGroup):
             ('BEFORE', "Before", "Departure kick — additive oscillation before the anchor keyframe"),
         ),
         default='AFTER',
+        update=_live_update,
     )
     duration: IntProperty(
         name="Duration",
