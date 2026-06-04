@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Mechanical Overshoot",
     "author": "Isaac O'Connor",
-    "version": (0, 3, 0),
+    "version": (0, 4, 0),
     "blender": (3, 6, 0),
     "location": "Graph Editor > Sidebar > Mechanical",
     "description": "Add elastic overshoot to mechanical animation keyframes.",
@@ -76,6 +76,16 @@ def _find_modifier(fcurve, anchor_frame):
         if m.name == name:
             return m
     return None
+
+
+def _parse_anchor_from_name(name):
+    """Return the anchor frame encoded in a MechOvershoot modifier name, or None."""
+    if not name.startswith(MODIFIER_PREFIX):
+        return None
+    try:
+        return float(name[len(MODIFIER_PREFIX):].strip())
+    except ValueError:
+        return None
 
 
 
@@ -294,6 +304,72 @@ class GRAPH_OT_remove_mechanical_overshoot(Operator):
         return {'CANCELLED'}
 
 
+class GRAPH_OT_recalibrate_mechanical_overshoot(Operator):
+    bl_idname = "graph.recalibrate_mechanical_overshoot"
+    bl_label = "Recalibrate"
+    bl_description = (
+        "Re-anchor MechOvershoot modifier to the selected keyframe's current position. "
+        "Use after moving a keyframe that already has an overshoot applied."
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.area and context.area.type == 'GRAPH_EDITOR'
+
+    def execute(self, context):
+        recalibrated = 0
+
+        for fcurve, anchor_kp in _selected_keyframes(context):
+            new_frame = anchor_kp.co.x
+
+            if _find_modifier(fcurve, new_frame) is not None:
+                continue  # already in sync
+
+            # Build the set of frames that currently have keyframes so we can
+            # identify modifiers whose anchor frame is now orphaned (no keyframe there).
+            live_frames = {round(kp.co.x, 4) for kp in fcurve.keyframe_points}
+
+            best_mod = None
+            best_old_frame = None
+            best_dist = float('inf')
+            for m in fcurve.modifiers:
+                old_frame = _parse_anchor_from_name(m.name)
+                if old_frame is None:
+                    continue
+                if round(old_frame, 4) in live_frames:
+                    continue  # still attached to an existing keyframe
+                dist = abs(old_frame - new_frame)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_mod = m
+                    best_old_frame = old_frame
+
+            if best_mod is None:
+                continue
+
+            # Decode shape from the orphaned modifier; recompute dir_sign at new position.
+            params = _decode_modifier(best_mod, best_old_frame, fcurve, anchor_kp)
+            after = params['direction'] == 'AFTER'
+            dir_sign = _direction_sign(fcurve, anchor_kp, after)
+
+            best_mod.name = _modifier_name(new_frame)
+            _configure_modifier(
+                best_mod, new_frame,
+                params['duration'], params['amplitude'], params['bounces'],
+                dir_sign, after, params['flip'],
+            )
+            fcurve.update()
+            recalibrated += 1
+
+        if recalibrated:
+            self.report({'INFO'}, f"Recalibrated {recalibrated} modifier(s).")
+            return {'FINISHED'}
+
+        self.report({'WARNING'}, "No orphaned MechOvershoot modifiers found on selected keyframes.")
+        return {'CANCELLED'}
+
+
 class GRAPH_OT_apply_mechanical_overshoot(Operator):
     bl_idname = "graph.apply_mechanical_overshoot"
     bl_label = "Apply Mechanical Overshoot"
@@ -331,7 +407,9 @@ class GRAPH_PT_mechanical_overshoot(Panel):
         layout = self.layout
         s = context.scene.mechanical_overshoot_settings
         layout.operator("graph.apply_mechanical_overshoot", icon="MOD_WAVE")
-        layout.operator("graph.remove_mechanical_overshoot", icon="X")
+        row = layout.row(align=True)
+        row.operator("graph.remove_mechanical_overshoot", icon="X")
+        row.operator("graph.recalibrate_mechanical_overshoot", icon="FILE_REFRESH")
         layout.separator()
         layout.prop(s, "direction", expand=True)
         layout.prop(s, "duration")
@@ -343,6 +421,7 @@ class GRAPH_PT_mechanical_overshoot(Panel):
 classes = (
     MechanicalOvershootSettings,
     GRAPH_OT_remove_mechanical_overshoot,
+    GRAPH_OT_recalibrate_mechanical_overshoot,
     GRAPH_OT_apply_mechanical_overshoot,
     GRAPH_PT_mechanical_overshoot,
 )
