@@ -126,12 +126,8 @@ def _live_update(self, context):
             modifier = _find_modifier(fcurve, anchor_kp.co.x)
             if modifier is None:
                 continue
-            anchor_frame = anchor_kp.co.x
-            duration = (modifier.frame_end - anchor_frame) if after else (anchor_frame - modifier.frame_start)
-            if duration < 1:
-                continue
             dir_sign = _direction_sign(fcurve, anchor_kp, after)
-            _configure_modifier(modifier, anchor_frame, duration, self.amplitude, self.bounces, dir_sign, after)
+            _configure_modifier(modifier, anchor_kp.co.x, self.duration, self.amplitude, self.bounces, dir_sign, after)
             fcurve.update()
             changed = True
         if changed:
@@ -159,6 +155,7 @@ class MechanicalOvershootSettings(PropertyGroup):
         default=10,
         min=2,
         max=500,
+        update=_live_update,
     )
     amplitude: FloatProperty(
         name="Amplitude",
