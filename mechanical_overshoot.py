@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Mechanical Overshoot",
     "author": "Isaac O'Connor",
-    "version": (1, 0, 0),
+    "version": (0, 2, 0),
     "blender": (3, 6, 0),
     "location": "Graph Editor > Sidebar > Mechanical",
     "description": "Add elastic overshoot to mechanical animation keyframes.",
@@ -15,6 +15,7 @@ from bpy.types import Operator, Panel, PropertyGroup
 
 MODIFIER_PREFIX = "MechOvershoot"
 _IS_UPDATING = False
+_last_sync_key = None
 
 # SINC first lobe peaks at x=1.5 with magnitude 1/(1.5π) ≈ 0.2122.
 # Normalise so user's Amplitude directly equals peak overshoot in curve units.
@@ -75,6 +76,24 @@ def _find_modifier(fcurve, anchor_frame):
         if m.name == name:
             return m
     return None
+
+
+
+def _decode_modifier(modifier, anchor_frame):
+    """Reverse _configure_modifier to recover user-facing params."""
+    after = modifier.phase_multiplier >= 0
+    if after:
+        duration = max(2, round(modifier.frame_end - anchor_frame))
+    else:
+        duration = max(2, round(anchor_frame - modifier.frame_start))
+    bounces = max(1, round(abs(modifier.phase_multiplier) * duration))
+    amplitude = abs(modifier.amplitude) / _NORMALIZER
+    return {
+        'direction': 'AFTER' if after else 'BEFORE',
+        'duration': duration,
+        'amplitude': amplitude,
+        'bounces': bounces,
+    }
 
 
 def _configure_modifier(modifier, anchor_frame, duration, amplitude, bounces, dir_sign, after):
@@ -138,6 +157,62 @@ def _live_update(self, context):
                         area.tag_redraw()
     finally:
         _IS_UPDATING = False
+
+
+def _sync_timer():
+    global _last_sync_key, _IS_UPDATING
+    if _IS_UPDATING:
+        return 0.1
+
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type != 'GRAPH_EDITOR':
+                continue
+            for region in area.regions:
+                if region.type != 'WINDOW':
+                    continue
+                with bpy.context.temp_override(window=window, area=area, region=region):
+                    scene = bpy.context.scene
+                    if not scene or not hasattr(scene, 'mechanical_overshoot_settings'):
+                        return 0.1
+
+                    first_fc = first_kp = first_mod = None
+                    for fc, kp in _selected_keyframes(bpy.context):
+                        mod = _find_modifier(fc, kp.co.x)
+                        if mod is not None:
+                            first_fc, first_kp, first_mod = fc, kp, mod
+                            break
+
+                    if first_kp is None:
+                        _last_sync_key = None
+                        return 0.1
+
+                    try:
+                        sync_key = (first_fc.id_data.name, first_fc.data_path,
+                                    first_fc.array_index, round(first_kp.co.x, 4))
+                    except Exception:
+                        sync_key = (id(first_fc), round(first_kp.co.x, 4))
+
+                    if sync_key == _last_sync_key:
+                        return 0.1
+                    _last_sync_key = sync_key
+
+                    params = _decode_modifier(first_mod, first_kp.co.x)
+                    s = scene.mechanical_overshoot_settings
+                    _IS_UPDATING = True
+                    try:
+                        if s.direction != params['direction']:
+                            s.direction = params['direction']
+                        if s.duration != params['duration']:
+                            s.duration = params['duration']
+                        if abs(s.amplitude - params['amplitude']) > 0.005:
+                            s.amplitude = params['amplitude']
+                        if s.bounces != params['bounces']:
+                            s.bounces = params['bounces']
+                    finally:
+                        _IS_UPDATING = False
+                return 0.1
+    return 0.1
 
 
 class MechanicalOvershootSettings(PropertyGroup):
@@ -261,9 +336,13 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.mechanical_overshoot_settings = PointerProperty(type=MechanicalOvershootSettings)
+    if not bpy.app.timers.is_registered(_sync_timer):
+        bpy.app.timers.register(_sync_timer, persistent=True)
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_sync_timer):
+        bpy.app.timers.unregister(_sync_timer)
     del bpy.types.Scene.mechanical_overshoot_settings
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
